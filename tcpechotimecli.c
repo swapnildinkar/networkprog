@@ -75,12 +75,8 @@ int main(int argc, char *argv[])
                     printf("Error connecting to time server.\n");
                     return(0);
                 }
-                else{
-                }
                 
                 close(pfd[1]);
-                
-                printf("\n--------------------------------------------------\n");
                 return(0);
             }
             else{
@@ -103,8 +99,6 @@ int main(int argc, char *argv[])
                     }
                 }
                 close(pfd[0]);
-                
-                printf("\n--------------------------------------------------\n");
             }
         }
         else if(strcmp(choice, "2") == 0)
@@ -157,14 +151,10 @@ int main(int argc, char *argv[])
                     }
                 }
                 close(pfd[0]);
-                
-                printf("\n--------------------------------------------------\n");
             }
         }
         else if(strcmp(choice, "3") == 0)
         {
-            
-            printf("\n--------------------------------------------------\n");
             return(1);
         }
         else{

@@ -11,10 +11,12 @@ void * time_srv(void * confd){
     struct timeval timeout;
     int maxfd = connfd+1;
     FD_ZERO(&rset);
+    printf("--------------------------------------------------\n");
+    printf("Server Started.\n");
+    printf("--------------------------------------------------\n");
     for ( ; ; ) {
         FD_SET(connfd, &rset);
         if(select(maxfd, &rset, NULL, NULL, &timeout) > 0){
-            printf("Client terminated.");
             Close(connfd);
             break;
         }
@@ -26,6 +28,8 @@ void * time_srv(void * confd){
         timeout.tv_sec = 5;
         timeout.tv_usec = 0;
     }
+    
+    printf("Time server thread closed.\n");
     return(NULL);
 }
 
@@ -43,12 +47,11 @@ void * echo_srv(void * confd){
             Writen(connfd, buff, n);
         }
         else if(n==0){
-            
-            printf("Client terminated.");
             Close(connfd);
             break;
         }
     }
+    printf("Echo server thread closed.\n");
     return(NULL);
 }
 
@@ -82,6 +85,7 @@ main(int argc, char **argv)
         FD_SET( echolistenfd, &rset);
         select(maxfd, &rset, NULL, NULL, NULL);
         if(FD_ISSET(timelistenfd, &rset)){
+            printf("Time server thread created.\n");
             pthread_t      tid;  // thread ID
             pthread_attr_t attr; // thread attribute
             
@@ -92,9 +96,9 @@ main(int argc, char **argv)
             connfd = Accept(timelistenfd, (SA *) NULL, NULL);
             // create the thread 
             pthread_create(&tid, &attr, &time_srv, &connfd);
-            
         }
         else{
+            printf("Echo server thread created.\n");
             pthread_t      tid;  // thread ID
             pthread_attr_t attr; // thread attribute
             
@@ -105,7 +109,6 @@ main(int argc, char **argv)
             connfd = Accept(echolistenfd, (SA *) NULL, NULL);
             // create the thread
             pthread_create(&tid, &attr, &echo_srv, &connfd);
-
         }
     }
 }

@@ -60,7 +60,7 @@ main(int argc, char **argv)
     struct sockaddr_in	servaddr;
     
     printf("--------------------------------------------------\n");
-    printf("Connected to Echo Client.\n");
+    printf("Connected to Echo Server.\n");
     printf("--------------------------------------------------\n");
     pfd = atoi(argv[2]);
     signal(SIGINT, sig_child);

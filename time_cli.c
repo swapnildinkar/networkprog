@@ -15,7 +15,7 @@ int main(int argc, char **argv)
 {
     
     printf("--------------------------------------------------\n");
-    printf("Connected to Time Client.\n");
+    printf("Connected to Time Server.\n");
     printf("--------------------------------------------------\n");
     int					sockfd, n;
     char				recvline[MAXLINE + 1];
