@@ -3,7 +3,7 @@
 int pfd;
 
 void push_to_parent(char* msg){
-    write(pfd, msg, sizeof(msg));
+    write(pfd, msg, strlen(msg));
     exit(EXIT_SUCCESS);
 }
 
@@ -15,8 +15,8 @@ int main(int argc, char **argv)
 {
     
     printf("--------------------------------------------------\n");
-    printf("Connected to Time Client.\n\n");
-    printf("\n--------------------------------------------------\n");
+    printf("Connected to Time Client.\n");
+    printf("--------------------------------------------------\n");
     int					sockfd, n;
     char				recvline[MAXLINE + 1];
     struct sockaddr_in	servaddr;
@@ -45,4 +45,5 @@ int main(int argc, char **argv)
     }
     if (n < 0)
         push_to_parent("read error");
+    push_to_parent("Server terminated prematurely.\n");
 }

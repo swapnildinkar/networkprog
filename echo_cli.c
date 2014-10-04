@@ -3,7 +3,7 @@
 int pfd;
 
 void push_to_parent(char* msg){
-    write(pfd, msg, sizeof(msg));
+    write(pfd, msg, strlen(msg));
     exit(EXIT_SUCCESS);
 }
 
@@ -33,7 +33,7 @@ echo_cli(FILE *fp, int sockfd)
                 if (stdineof == 1)
                     return;		/* normal termination */
                 else{
-                    push_to_parent("server terminated prematurely");
+                    push_to_parent("Server terminated prematurely");
                 }
             }
             
@@ -61,7 +61,7 @@ main(int argc, char **argv)
     
     printf("--------------------------------------------------\n");
     printf("Connected to Echo Client.\n");
-    printf("\n--------------------------------------------------\n");
+    printf("--------------------------------------------------\n");
     pfd = atoi(argv[2]);
     signal(SIGINT, sig_child);
     if (argc != 3)
