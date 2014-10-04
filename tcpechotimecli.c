@@ -97,6 +97,11 @@ int main(int argc, char *argv[])
                         wait(NULL);
                         break;
                     }
+                    if(FD_ISSET(fileno(stdin), &stdin_fd)){
+                        char buf[MAXLINE];
+                        Fgets(buf, MAXLINE, stdin);
+                        printf("Please enter your query in child window.\n");
+                    }
                 }
                 close(pfd[0]);
             }
@@ -148,6 +153,11 @@ int main(int argc, char *argv[])
                         }
                         wait(NULL);
                         break;
+                    }
+                    if(FD_ISSET(fileno(stdin), &stdin_fd)){
+                        char buf[MAXLINE];
+                        Fgets(buf, MAXLINE, stdin);
+                        printf("Please enter your query in child window.\n");
                     }
                 }
                 close(pfd[0]);
