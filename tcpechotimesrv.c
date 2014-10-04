@@ -11,9 +11,6 @@ void * time_srv(void * confd){
     struct timeval timeout;
     int maxfd = connfd+1;
     FD_ZERO(&rset);
-    printf("--------------------------------------------------\n");
-    printf("Server Started.\n");
-    printf("--------------------------------------------------\n");
     for ( ; ; ) {
         FD_SET(connfd, &rset);
         if(select(maxfd, &rset, NULL, NULL, &timeout) > 0){
@@ -76,6 +73,9 @@ main(int argc, char **argv)
 {
     int					timelistenfd, echolistenfd, connfd;
     fd_set              rset;
+    printf("--------------------------------------------------\n");
+    printf("Server Started.\n");
+    printf("--------------------------------------------------\n");
     timelistenfd = init_ports(1300);
     echolistenfd = init_ports(1301);
     int maxfd = max(timelistenfd, echolistenfd) + 1;
