@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <assert.h>
 
+/* global variables */
+int already_visited = 0;
+
 /* function returns ip */
 int 
 get_ip (char *serv_vm, char *canon_ip) {
@@ -34,6 +37,24 @@ csum (unsigned short *buf, int nwords)
     sum = (sum >> 16) + (sum &0xffff);
     sum += (sum >> 16);
     return (unsigned short)(~sum);
+}
+
+/* join the multicast group */
+int
+join_multicast_group (char *mc_ip_addr, int mc_port, int mc_sockfd) {
+    
+    assert (mc_ip_addr);
+    
+    struct sockaddr_in  mc;
+    bzero (&mc, sizeof (mc));
+    mc.sin_family = AF_INET;
+    inet_pton (AF_INET, mc_ip_addr, &(mc.sin_addr));
+    mc.sin_port = htons(mc_port);
+    
+    Bind(mc_sockfd, (SA *) &mc, sizeof(mc));
+    Mcast_join (mc_sockfd, (const SA *) &mc, sizeof(mc), NULL, 0);
+
+    return 1;
 }
 
 /* include udp_write */
@@ -81,7 +102,6 @@ fill_t_frame_payload (tour_frame_t *t_frame, int argc, char *argv[]) {
     
     /* Take input from command line. */
     while (argc > 1) {
-    
         i++;
         get_ip (argv[i], ip_addr);
         
@@ -90,8 +110,9 @@ fill_t_frame_payload (tour_frame_t *t_frame, int argc, char *argv[]) {
     }
     
     t_frame->size = i+1;
-    t_frame->index = 0;
-    
+    t_frame->index = 1;
+    t_frame->mc_port = MC_PORT;
+    strcpy (t_frame->mc_ip, MC_IP_ADDR);
     return 1;
 }
 
@@ -105,24 +126,69 @@ print_tour (tour_frame_t *t_frame) {
     return 1;
 }
 
+/* broadcast on multicast group from final node */
+int
+send_to_multicast_group (int mc_sockfd, char *mc_ip, int mc_port) {
+    char *self_ip = get_self_ip ();
+    struct sockaddr_in  mc;
+    bzero (&mc, sizeof (struct sockaddr_in));
+    mc.sin_family = AF_INET;
+    inet_pton (AF_INET, mc_ip, &(mc.sin_addr));
+    mc.sin_port = htons (mc_port);
+
+    printf ("self ip : %s\n", self_ip);
+    Sendto(mc_sockfd, self_ip, IP_LEN, 0,(struct sockaddr *) &mc, 
+                sizeof (struct sockaddr_in));
+
+    DEBUG (printf ("Sent message to the broadcast group.\n"));
+    return 1;
+}
+
 /* handle the received tour packet */
 int
-handle_tour (tour_frame_t *t_frame, int rt_sockfd) {
+handle_tour (tour_frame_t *t_frame, int rt_sockfd, int mc_sockfd) {
 
+    assert (t_frame);
+
+    t_frame->index += 1;
+    
     /* check if this is the final node */
-    if (t_frame->index + 1 == t_frame->size) {
+    if (t_frame->index == t_frame->size) {
+    
+        /* send message to the multicast group. */
+        send_to_multicast_group (mc_sockfd, t_frame->mc_ip, t_frame->mc_port);
         
+        already_visited = 0;
         printf ("This is the last node of the tour!\n");
         return 1;
     }
 
     /* if this is an intermediate node */
     
-    printf ("This is an intermediate node of the tour!\n");
+    /* join the multicast group */
+ 
+    if (!already_visited) {
+        printf ("This is an intermediate node of the tour! Not already visited\n");
+        already_visited = 1;
+
+        join_multicast_group (t_frame->mc_ip, t_frame->mc_port, mc_sockfd);
+        DEBUG (printf ("Joined multicast group on ip addr: %s and port :%d\n",
+                    t_frame->mc_ip, t_frame->mc_port));
+
+        /* send the packet to the next node in the tour. */
+        
+        udp_write (t_frame, sizeof (tour_frame_t), t_frame->payload[t_frame->index], 
+                rt_sockfd);
+        
+        return 1;
+    }
+
+    /* if the node is intermediate node, and has already been visited. */
     
-    t_frame->index += 1;
+    printf ("This is an intermediate node of the tour! Already visited\n");
+    /* send the packet to the next node in the tour. */
     udp_write (t_frame, sizeof (tour_frame_t), t_frame->payload[t_frame->index], 
-                    rt_sockfd);
+            rt_sockfd);
     
     return 1;
 }
@@ -141,15 +207,24 @@ start_tour (tour_frame_t *t_frame, int rt_sockfd, int argc, char *argv[]) {
 }
 
 int main (int argc, char *argv[]) {
-    int pf_sockfd, rt_sockfd, len, one = 1;
+    int pf_sockfd, rt_sockfd, mc_sockfd, len, one = 1;
     socklen_t rtsize = sizeof (struct sockaddr_in);
     const int *val = &one;
     fd_set set, currset;
-    tour_frame_t *t_frame = calloc (1, sizeof (tour_frame_t));
-    char rt_buf[sizeof (tour_frame_t)]; 
+    struct timeval currtime;
+    char curr_time[64], rt_buf[sizeof (tour_frame_t)], mc_buf[MAXLINE]; 
+    char* vm_name;
+    struct sockaddr_in rt_addr, mc_addr;
+    struct tm *nowtm;
+    time_t nowtime;
     
-    struct sockaddr_in rt_addr;
-
+    tour_frame_t *t_frame = calloc (1, sizeof (tour_frame_t));
+    gettimeofday(&currtime, NULL);
+    
+    nowtime = currtime.tv_sec;
+    nowtm = localtime(&nowtime);
+    strftime(curr_time, sizeof (curr_time), "%Y-%m-%d %H:%M:%S", nowtm);
+    
     /* Get the new PF Packet socket */
     pf_sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
   
@@ -161,19 +236,22 @@ int main (int argc, char *argv[]) {
         perror("setsockopt() error");
         exit(-1);
     }
-  
+    
+    /* get the multicast socket. */
+    mc_sockfd = Socket(AF_INET, SOCK_DGRAM, 0); 
+
     /* start the tour if the user has provided the tour. */
-    if (argc > 0) {
+    if (argc > 1) {
         start_tour (t_frame, rt_sockfd, argc, argv);
     }
 
     FD_ZERO(&set);
     FD_SET(rt_sockfd, &set);
-    //FD_SET(arp_sockfd, &set);
+    FD_SET(mc_sockfd, &set);
 
     while (1) {
         currset = set;
-        if (select(max(rt_sockfd, 1)+1, 
+        if (select(max(rt_sockfd, mc_sockfd)+1, 
                     &currset, NULL, NULL, NULL) < 0) {
             if(errno == EINTR) {
                 continue;
@@ -181,27 +259,45 @@ int main (int argc, char *argv[]) {
             perror("Select error");
         }
         
-        printf ("Packet Received!\n");
-
         /* receiving from another tour process */
         if (FD_ISSET(rt_sockfd, &currset)) {
-            printf ("Packet received on route socket");
-        
+
+            printf ("======================= RCVD ROUTE MSG ========================\n");
             if ((len = recvfrom (rt_sockfd, rt_buf, ETH_FRAME_LEN, 0, 
                             (struct sockaddr *) &rt_addr, &rtsize)) < 0) {
                 perror("\nError in recvfrom");
                 return 0;
             }
-            
+                    
             t_frame = (tour_frame_t *) rt_buf;
             
             if (ntohs(t_frame->ip_hdr.ip_id) != HDR_ID) {
                 continue;
             }
-            DEBUG (print_tour (t_frame));
-            handle_tour (t_frame, rt_sockfd);
+            
+            //DEBUG (print_tour (t_frame));
+            vm_name = get_name_ip (t_frame->payload[(t_frame->index - 1)]);
+            printf ("%s received source routing packet from %s\n", curr_time, vm_name);
+
+            handle_tour (t_frame, rt_sockfd, mc_sockfd);
+            printf ("====================== HNDLD ROUTE MSG ========================\n");
         }
 
+        /* receiving from the multicast group */
+        if (FD_ISSET(mc_sockfd, &currset)) {
+            
+            printf ("======================= RCVD MCAST MSG ========================\n");
+            printf ("Received packet from multicast group.\n");
+            if ((len = recvfrom (mc_sockfd, mc_buf, ETH_FRAME_LEN, 0, 
+                            (struct sockaddr *) &mc_addr, &rtsize)) < 0) {
+                perror("\nError in recvfrom");
+                return 0;
+            }
+            
+            vm_name = get_name_ip ((char *) mc_buf);
+            printf ("Received multicast msg from: %s\n",(char *) vm_name);
+            printf ("====================== HNDLD MCAST MSG ========================\n");
+        }
     }
     return 0;
 }
