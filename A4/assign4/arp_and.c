@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <assert.h>
 
+
+/* hack global var */
+int global_connfd;
+
 /* Construct ARP frame */
 arp_frame_t *
 construct_arp (int hard_type, int prot_type, int op, char *src_mac,
@@ -315,7 +319,7 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
     
     struct sockaddr_un arp_proc_addr;
     char str_seq[MAXLINE], temp[MAXLINE];
-    char *self_eth_hwaddr;
+    char *self_eth_hwaddr, *dstmac_rcvd;
     void *data = recv_buff + 14;
 
     arp_frame_t *rcvd_frame = (arp_frame_t *) data;
@@ -352,6 +356,12 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
         }
         case __ARPREP: {
             printf ("ARP Response received.\n");
+            
+            dstmac_rcvd = convert_to_mac(rcvd_frame->src_mac);
+            printf("\n Global connfd: %d\n", global_connfd);
+            if (write(global_connfd, dstmac_rcvd, HW_ADDR_LEN) < 0) {
+                perror("Error on write");
+            }
 
             break;
         }
@@ -472,6 +482,8 @@ int main (int argc, const char *argv[]) {
             //send_params_t* sparams = get_send_params (buff);
             
             handle_proc_msg (proc_sockfd, arp_sockfd, buff);
+            global_connfd = connfd;
+            printf("\n global connfd %d\n", global_connfd);
         }
 
         /* receiving on ethernet interface */

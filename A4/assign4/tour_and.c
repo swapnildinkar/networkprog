@@ -293,7 +293,8 @@ int main (int argc, char *argv[]) {
     hw.sll_halen = ETH_ALEN; 
 
     areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
-    
+    printf("\nAddress recvd in Tour: \n");
+    print_mac (hw.sll_addr); 
     
 #if 0
     while (1) {

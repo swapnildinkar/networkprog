@@ -12,7 +12,7 @@ areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr) {
     assert(IPaddr);
     assert(HWaddr);
     
-    int sockfd = 0, socklen, length;
+    int sockfd = 0, socklen, length, nbytes, i;
     char dest_ip[IP_LEN];
     struct sockaddr_un arp_proc_addr;
     fd_set set, currset; 
@@ -48,33 +48,37 @@ areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr) {
 
     /* Get MAC address returned by ARP, and give it back to client. */
    
- //   FD_ZERO (&set);
- //   FD_SET (sockfd, &set);
- //   
- //   //TODO: handle timeout in this case
- //   if (select (sockfd + 1, &currset, NULL, NULL, NULL) < 0) {
- //       if (errno == EINTR) {
- //       
- //       }
- //       perror ("Select error.");
- //   }
+    FD_ZERO (&set);
+    FD_SET (sockfd, &set);
+    
+    if (select (sockfd + 1, &set, NULL, NULL, NULL) < 0) {
+        if (errno == EINTR) {
+        
+        }
+        perror ("Select error.");
+    }
+ 
+    /* Received msg from ARP. */
+    if (FD_ISSET (sockfd, &set)) {
+        
+        memset(buff, 0, MAXLINE); 
+        memset(&arp_proc_addr, 0, sizeof(arp_proc_addr));
+ 
+        DEBUG(printf ("\n====================================PROC_MESSAGE_RECEIVED====================================\n"));
+        /* block on recvfrom. collect info in 
+         * proc_addr and data in buff */
+        if ((nbytes = read(sockfd, buff, MAXLINE)) <= 0) { 
+            perror("Error in recvfrom");
+            return 0;
+        }
+        buff[nbytes] = '\0';
 
- //   /* Received msg from ARP. */
- //   if (FD_ISSET (sockfd, &currset)) {
- //       
- //       memset(buff, 0, MAXLINE); 
- //       memset(&arp_proc_addr, 0, sizeof(arp_proc_addr));
-
- //       DEBUG(printf ("\n====================================PROC_MESSAGE_RECEIVED====================================\n"));
- //       /* block on recvfrom. collect info in 
- //        * proc_addr and data in buff */
- //       if (recvfrom(sockfd, buff, MAXLINE, 
- //                   0, (struct sockaddr *) &arp_proc_addr, &socklen) < 0) {
- //           perror("Error in recvfrom");
- //           return 0;
- //       }
-
- //   }
+        printf("\nlength of recvd buff %d\n", nbytes); 
+        print_mac(buff);    
+        for (i = 0; i < nbytes; ++i) {
+           HWaddr->sll_addr[i] = buff[i]; 
+        }
+    }
 
     return 1;
 }
