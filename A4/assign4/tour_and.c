@@ -367,7 +367,23 @@ int main (int argc, char *argv[]) {
     FD_ZERO(&set);
     FD_SET(rt_sockfd, &set);
     FD_SET(mc_sockfd, &set);
+    
+    struct sockaddr_in  dest;
+    bzero (&dest, sizeof (struct sockaddr_in));
+    dest.sin_family = AF_INET;
+    inet_pton(AF_INET, "130.245.156.21", &(dest.sin_addr));
 
+    struct hwaddr hw;
+    bzero(&hw, sizeof(struct hwaddr));
+    hw.sll_ifindex = 2;
+    hw.sll_hatype = ARPHRD_ETHER;
+    hw.sll_halen = ETH_ALEN; 
+
+    areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
+    printf("\nAddress recvd in Tour: \n");
+    print_mac (hw.sll_addr); 
+    
+#if 0
     while (1) {
         currset = set;
         if ((t = select(max(rt_sockfd, mc_sockfd)+1, 
@@ -455,5 +471,7 @@ int main (int argc, char *argv[]) {
             //printf ("====================== HNDLD MCAST MSG ========================\n");
         }
     }
+#endif
     return 0;
+
 }

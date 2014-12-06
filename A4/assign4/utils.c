@@ -7,69 +7,77 @@ char *self_ip_addr;
 /* API to find out MAC address of destination IP. */
 int 
 areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr) {
-
+    
+    printf("\nDebug: came in areq\n");
     assert(IPaddr);
     assert(HWaddr);
     
-    int sockfd = 0, socklen;
-    char *dest_ip;
+    int sockfd = 0, socklen, length, nbytes, i;
+    char dest_ip[IP_LEN];
     struct sockaddr_un arp_proc_addr;
     fd_set set, currset; 
-    inet_ntop(AF_INET, &(((struct sockaddr_in *)IPaddr)->sin_addr), 
-            dest_ip, INET_ADDRSTRLEN);
+    
+    struct sockaddr_in *inaddr = (struct sockaddr_in *)IPaddr;
+    
     char str_seq[MAXLINE], buff[MAXLINE]; 
     socklen = sizeof (struct sockaddr_un);
     
-    memset (&arp_proc_addr, 0, sizeof(struct sockaddr_un));
-    
     /* create new UNIX Domain socket */
-    if((sockfd = socket(AF_LOCAL, SOCK_DGRAM, 0)) < 0) {
+    if((sockfd = socket(AF_LOCAL, SOCK_STREAM, 0)) < 0) {
         fprintf(stderr, "\nerror creating unix domain socket\n");
-        return 0;
-    }
-
-    /* ODR process to send message to */
-    arp_proc_addr.sun_family = AF_LOCAL;
-    strcpy(arp_proc_addr.sun_path, __UNIX_PROC_PATH);
-
-    /* construct the char sequence to write on UNIX Domain socket */
-    sprintf(str_seq, "%s\n", dest_ip);
-
-    if (sendto (sockfd, str_seq, strlen(str_seq), 0, 
-                (struct sockaddr *) &arp_proc_addr, sizeof(arp_proc_addr)) <= 0) {
-        perror("\n Error in sendto");
         return -1;
     }
 
-    DEBUG(printf("\nMessage sent to ARP process. Intended for dest ip %s\n", dest_ip));
+    /* ODR process to send message to */
+    memset (&arp_proc_addr, 0, sizeof(struct sockaddr_un));
+    arp_proc_addr.sun_family = AF_LOCAL;
+    strcpy(arp_proc_addr.sun_path, __UNIX_PROC_PATH);
     
+    /* connect on socket */
+    if (connect(sockfd, (struct sockaddr *)&arp_proc_addr, sizeof(arp_proc_addr)) < 0) {
+        fprintf(stderr, "\nerror connecting unix domain socket\n");
+        return -1;
+    }
+    
+    printf("\n Dest ip sent %s\n", inet_ntoa(inaddr->sin_addr));
+
+    if ((length = write(sockfd, &inaddr->sin_addr, sizeof(int))) < 0) {
+        fprintf(stderr, "\nerror writing on unix domain socket\n");
+        return -1;
+    }
+
     /* Get MAC address returned by ARP, and give it back to client. */
    
     FD_ZERO (&set);
     FD_SET (sockfd, &set);
-
-    if (select (sockfd + 1, &currset, NULL, NULL, NULL) < 0) {
+    
+    if (select (sockfd + 1, &set, NULL, NULL, NULL) < 0) {
         if (errno == EINTR) {
         
         }
         perror ("Select error.");
     }
-
+ 
     /* Received msg from ARP. */
-    if (FD_ISSET (sockfd, &currset)) {
+    if (FD_ISSET (sockfd, &set)) {
         
         memset(buff, 0, MAXLINE); 
         memset(&arp_proc_addr, 0, sizeof(arp_proc_addr));
-
+ 
         DEBUG(printf ("\n====================================PROC_MESSAGE_RECEIVED====================================\n"));
         /* block on recvfrom. collect info in 
          * proc_addr and data in buff */
-        if (recvfrom(sockfd, buff, MAXLINE, 
-                    0, (struct sockaddr *) &arp_proc_addr, &socklen) < 0) {
+        if ((nbytes = read(sockfd, buff, MAXLINE)) <= 0) { 
             perror("Error in recvfrom");
             return 0;
         }
+        buff[nbytes] = '\0';
 
+        printf("\nlength of recvd buff %d\n", nbytes); 
+        print_mac(buff);    
+        for (i = 0; i < nbytes; ++i) {
+           HWaddr->sll_addr[i] = buff[i]; 
+        }
     }
 
     return 1;
@@ -251,8 +259,10 @@ get_self_ip () {
 
 /* get name from ip */
 char *get_name_ip (char *ip) {
-
+    
     assert(ip);
+
+    DEBUG(printf("\nIP Address recvd : %s\n", ip));
     struct hostent *he;
     struct in_addr ipv4addr;
 
