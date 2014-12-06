@@ -19,20 +19,20 @@ typedef struct c_entry {
     int     sll_hatype;
     int     sockfd;
     struct c_entry *prev, *next;
-}c_entry_t;
+} c_entry_t;
 
 /* ARP Frame */
 typedef struct arp_frame {
-    int     hard_type;
-    int     prot_type;
-    size_t  hard_size;
-    size_t  prot_size;
-    int     op;
-    char    src_mac[HW_ADDR_LEN];
-    char    src_ip[IP_LEN];
-    char    dest_mac[HW_ADDR_LEN];
-    char    dest_ip[IP_LEN];
-}arp_frame_t;
+    uint16_t   hard_type;
+    uint16_t   prot_type;
+    uint8_t    hard_size;
+    uint8_t    prot_size;
+    uint16_t   op;
+    char  src_mac[HW_ADDR_LEN];
+    char  src_ip[IP_LEN];
+    char  dest_mac[HW_ADDR_LEN];
+    char  dest_ip[IP_LEN];
+} arp_frame_t;
 
 /* head of odr routing table */
 c_entry_t *cache_table_head;

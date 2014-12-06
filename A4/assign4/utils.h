@@ -59,7 +59,7 @@ char * get_self_ip ();
 char *get_name_ip (char *);
 char *get_hwaddr_eth0();
 struct hwa_info * Get_hw_struct_head();
-int areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr);
+int areq (struct sockaddr *, socklen_t , struct hwaddr *);
 
 #endif /* __UTILS_H */
 

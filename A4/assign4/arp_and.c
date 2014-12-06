@@ -13,18 +13,18 @@ construct_arp (int hard_type, int prot_type, int op, char *src_mac,
     assert (dest_mac);
     assert (dest_ip);
 
-    arp_frame_t *arp_frame     = (arp_frame_t *)calloc(1, sizeof(arp_frame_t));
+    arp_frame_t *arp_frame  = (arp_frame_t *)calloc(1, sizeof(arp_frame_t));
 
-    arp_frame->hard_type    = htonl (hard_type);
-    arp_frame->prot_type    = htonl (prot_type);
-    arp_frame->hard_size    = htonl (HW_ADDR_LEN);
-    arp_frame->prot_size    = htonl (sizeof (prot_type));
-    arp_frame->op           = htonl (op);
+    arp_frame->hard_type    = htons (hard_type);
+    arp_frame->prot_type    = htons (ARP_HDR_PROTO);
+    arp_frame->hard_size    =  (HW_ADDR_LEN);
+    arp_frame->prot_size    =  (sizeof (prot_type));
+    arp_frame->op           = htons (op);
 
     DEBUG (printf ("op: %d\n", op));
-    strncpy (arp_frame->src_mac, src_mac, HW_ADDR_LEN);
+    memcpy (arp_frame->src_mac, src_mac, HW_ADDR_LEN);
     strncpy (arp_frame->src_ip, src_ip, IP_LEN);
-    strncpy (arp_frame->dest_mac, dest_mac, HW_ADDR_LEN);
+    memcpy (arp_frame->dest_mac, dest_mac, HW_ADDR_LEN);
     strncpy (arp_frame->dest_ip, dest_ip, IP_LEN);
 
     return arp_frame;
@@ -202,11 +202,9 @@ int
 convert_net_host_order(arp_frame_t* arp_frame) {
     assert(arp_frame); 
 
-    arp_frame->hard_type    = ntohl (arp_frame->hard_type);
-    arp_frame->prot_type    = ntohl (arp_frame->prot_type);
-    arp_frame->hard_size    = ntohl (arp_frame->hard_size);
-    arp_frame->prot_size    = ntohl (arp_frame->prot_size);
-    arp_frame->op           = ntohl (arp_frame->op);
+    arp_frame->hard_type    = ntohs (arp_frame->hard_type);
+    arp_frame->prot_type    = ntohs (arp_frame->prot_type);
+    arp_frame->op           = ntohs (arp_frame->op);
     
     return 0;
 }
@@ -216,7 +214,6 @@ int
 send_arp_req_broadcast (int sockfd, char *dest_ip, char *src_ip) {
     assert(dest_ip);
     assert(src_ip);
-    //assert(payload);
 
     struct hwa_info *curr = Get_hw_struct_head(); 
     char if_name[MAXLINE];
@@ -226,8 +223,6 @@ send_arp_req_broadcast (int sockfd, char *dest_ip, char *src_ip) {
 
     strcpy(src_vmname, get_name_ip(src_ip));
     strcpy(dst_vmname, get_name_ip(dest_ip));
-    assert(src_vmname);
-    assert(dst_vmname);
 
     int type = __ARPREQ, hard_type = 0, prot_type = 0;
 
@@ -261,63 +256,103 @@ send_arp_req_broadcast (int sockfd, char *dest_ip, char *src_ip) {
                         dest_mac, curr->if_index, arpframe) < 0) {
                 return -1;
             }
+
+            break;
         }
     }
     return 0;
 }
 
+/* Send an arp response */
+int
+send_arp_response (int pf_packet, char *dest_ip, char *dest_hw_addr, int sll_ifindex) {
+    assert(dest_ip);
+    assert(dest_hw_addr);
+
+    arp_frame_t *arpframe;
+
+    arpframe = construct_arp (0, 0, __ARPREP, get_hwaddr_eth0(), 
+            get_self_ip(), dest_hw_addr, dest_ip);
+
+    if (arpframe == NULL) {
+        fprintf(stderr, "\nError creating odr frame");
+        return -1;
+    }
+
+    printf("\nSending ARP REPLY to ip %s\n", dest_ip);
+
+    if(send_raw_frame (pf_packet, get_hwaddr_eth0(), 
+                dest_hw_addr, sll_ifindex, arpframe) < 0) {
+        return -1;
+    }
+}
+
+
 /* Handle ARP Requests received from peer message. */
 int 
-handle_proc_msg (int proc_sockfd, int arp_sockfd) {
+handle_proc_msg (int proc_sockfd, int arp_sockfd, char *buff) {
     
-    char *dest_ip, *src_ip;
+    assert(buff);
+    
+    char *src_ip = get_self_ip ();
+    struct in_addr destip = *(struct in_addr *)buff;
 
-    src_ip = get_self_ip ();
-    dest_ip = get_self_ip ();
-
-    if (send_arp_req_broadcast (arp_sockfd, dest_ip, src_ip) < 0) {
+    DEBUG(printf("\nReceived : %s\n", inet_ntoa(destip)));
+    
+    /* send the arp request out on all interfaces */
+    if (send_arp_req_broadcast (arp_sockfd, inet_ntoa(destip), src_ip) < 0) {
         printf ("Error sending ARP REQ\n");
         return -1;
     }
+    
     return 1;
 }
 
 /* Handle messages received over ethernet. */
 int 
-handle_ethernet_msg (int proc_connfd, int arp_sockfd, struct sockaddr_ll *arp_addr,
+handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_addr,
                         void *recv_buff, char *src_mac) {
+    
     struct sockaddr_un arp_proc_addr;
     char str_seq[MAXLINE], temp[MAXLINE];
-    arp_frame_t *rcvd_frame = (arp_frame_t *) recv_buff;
+    char *self_eth_hwaddr;
+    void *data = recv_buff + 14;
+
+    arp_frame_t *rcvd_frame = (arp_frame_t *) data;
     int n;
     socklen_t socklen = sizeof (arp_proc_addr);
     
-    DEBUG (printf ("Received frame hdr protocol ID: %d\n", arp_addr->sll_protocol));
-    DEBUG (printf ("Received frame hdr protocol ID: %u\n", arp_addr->sll_pkttype));
-    DEBUG (printf ("Received frame pckt protocol ID: %d\n", rcvd_frame->prot_type));
-    DEBUG (printf ("Received frame op: %d\n", rcvd_frame->op));
-    DEBUG (printf ("Received frame src_mac: %d\n", rcvd_frame->src_mac));
-    DEBUG (printf ("Received frame dest_mac: %d\n", rcvd_frame->dest_mac));
+    convert_net_host_order (rcvd_frame);
+    
+    DEBUG (printf ("\nReceived frame src_mac: "));
     print_mac (rcvd_frame->src_mac);
+    DEBUG (printf ("\nReceived frame dest_mac: "));
     print_mac (rcvd_frame->dest_mac);
 
-    DEBUG (printf ("Received frame src_ip: %d\n", rcvd_frame->src_ip));
+    DEBUG (printf ("\nReceived frame src_ip: %s\n", rcvd_frame->src_ip));
     
-    convert_net_host_order (rcvd_frame);
-
-    DEBUG (printf ("Received frame hdr protocol ID: %d\n", arp_addr->sll_protocol));
-    DEBUG (printf ("Received frame hdr protocol ID: %u\n", arp_addr->sll_pkttype));
-    DEBUG (printf ("Received frame pckt protocol ID: %d\n", rcvd_frame->prot_type));
-    DEBUG (printf ("Received frame op: %d\n", rcvd_frame->op));
   
     switch (rcvd_frame->op) {
         case __ARPREQ: {
 
             printf ("ARP Request received.\n");
+
+            /* if dest ip and my self ip matches, this is for me */
+            if (strcmp(get_self_ip(), rcvd_frame->dest_ip) == 0) {
+                printf ("This request is for me \n"); 
+                
+                /* update entry in cache for this source */
+
+                /* send an ARP Response */
+                send_arp_response(arp_sockfd, rcvd_frame->src_ip, 
+                                        rcvd_frame->src_mac, arp_addr->sll_ifindex); 
+
+            }
             break;
         }
         case __ARPREP: {
             printf ("ARP Response received.\n");
+
             break;
         }
         default: {
@@ -344,7 +379,7 @@ handle_ethernet_msg (int proc_connfd, int arp_sockfd, struct sockaddr_ll *arp_ad
 
 int main (int argc, const char *argv[]) {
 
-    int proc_sockfd, arp_sockfd, socklen, len, proc_connfd;
+    int proc_sockfd, arp_sockfd, socklen, len, connfd;
     struct sockaddr_un serv_addr, proc_addr, resp_addr;
     struct sockaddr_ll arp_addr;
     fd_set set, currset;
@@ -352,8 +387,8 @@ int main (int argc, const char *argv[]) {
     char buff[MAXLINE];
 
     /* initializations */
-    socklen        = sizeof(struct sockaddr_un);
-    void *recv_buf = malloc(ETH_FRAME_LEN); 
+    socklen           = sizeof(struct sockaddr_un);
+    void *recv_buf    = malloc(ETH_FRAME_LEN); 
     socklen_t arpsize = sizeof(struct sockaddr_ll);
 
     DEBUG (printf ("HW addr for eth0: "));
@@ -371,6 +406,7 @@ int main (int argc, const char *argv[]) {
 
     unlink(__UNIX_PROC_PATH);
     memset(&serv_addr, 0, sizeof(serv_addr)); 
+    
     serv_addr.sun_family = AF_LOCAL;
     strcpy(serv_addr.sun_path, __UNIX_PROC_PATH);
 
@@ -378,6 +414,7 @@ int main (int argc, const char *argv[]) {
     Bind(proc_sockfd, (SA *)&serv_addr, SUN_LEN(&serv_addr));
     DEBUG(printf("\nUnix Domain socket %d, sun_path file name %s\n",
                 proc_sockfd, __UNIX_PROC_PATH)); 
+    
     Listen(proc_sockfd, LISTENQ);
 
     printf ("ARP Module called.");
@@ -394,8 +431,8 @@ int main (int argc, const char *argv[]) {
     FD_SET(arp_sockfd, &set);
 
     /* TESTING */
-    handle_proc_msg (proc_sockfd, arp_sockfd);
-    DEBUG (printf ("ARP REQ sent!\n"));
+    //handle_proc_msg (proc_sockfd, arp_sockfd);
+    //DEBUG (printf ("ARP REQ sent!\n"));
 
     /* Monitor both sockets. */
     while (1) {
@@ -416,11 +453,17 @@ int main (int argc, const char *argv[]) {
 
             DEBUG(printf ("\n====================================PROC_MESSAGE_RECEIVED====================================\n"));
             
-            Accept (proc_connfd, (struct sockaddr *) &serv_addr, &socklen);
+            if((connfd = accept(proc_sockfd, (struct sockaddr *) &serv_addr, &socklen)) < 0) {
+                if (errno == EINTR)
+                    continue;
+
+                perror("error in accept\n");
+                return -1;
+            }
             
             /* block on recvfrom. collect info in 
              * proc_addr and data in buff */
-            if (Read (proc_connfd, buff, sizeof (buff)) < 0) { 
+            if (Read (connfd, buff, sizeof (buff)) < 0) { 
                 perror("Error in Read");
                 return 0;
             }
@@ -428,7 +471,7 @@ int main (int argc, const char *argv[]) {
             /* populate the send params from char sequence received from process */
             //send_params_t* sparams = get_send_params (buff);
             
-            handle_proc_msg (proc_connfd, arp_sockfd);
+            handle_proc_msg (proc_sockfd, arp_sockfd, buff);
         }
 
         /* receiving on ethernet interface */
