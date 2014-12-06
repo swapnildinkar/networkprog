@@ -325,6 +325,28 @@ handle_mc_msg (int mc_sockfd, tour_frame_t *t_frame, char *mc_buf) {
     return 1;
 }
 
+/* get mac address from ARP. */
+int
+get_mac (char *dest_ip, char *mac) {
+
+    struct sockaddr_in  dest;
+    bzero (&dest, sizeof (struct sockaddr_in));
+    dest.sin_family = AF_INET;
+    inet_pton(AF_INET, dest_ip, &(dest.sin_addr));
+
+    struct hwaddr hw;
+    bzero(&hw, sizeof(struct hwaddr));
+    hw.sll_ifindex = 2;
+    hw.sll_hatype = ARPHRD_ETHER;
+    hw.sll_halen = ETH_ALEN; 
+
+    areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
+    printf("\nAddress recvd in Tour: \n");
+    print_mac (hw.sll_addr);
+    memcpy (mac, hw.sll_addr, HW_ADDR_LEN);
+    return 1;
+}
+
 int main (int argc, char *argv[]) {
     int rt_sockfd, mc_sockfd, len, one = 1, t = 0;
     socklen_t rtsize = sizeof (struct sockaddr_in);
@@ -368,22 +390,7 @@ int main (int argc, char *argv[]) {
     FD_SET(rt_sockfd, &set);
     FD_SET(mc_sockfd, &set);
     
-    struct sockaddr_in  dest;
-    bzero (&dest, sizeof (struct sockaddr_in));
-    dest.sin_family = AF_INET;
-    inet_pton(AF_INET, "130.245.156.21", &(dest.sin_addr));
-
-    struct hwaddr hw;
-    bzero(&hw, sizeof(struct hwaddr));
-    hw.sll_ifindex = 2;
-    hw.sll_hatype = ARPHRD_ETHER;
-    hw.sll_halen = ETH_ALEN; 
-
-    areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
-    printf("\nAddress recvd in Tour: \n");
-    print_mac (hw.sll_addr); 
     
-#if 0
     while (1) {
         currset = set;
         if ((t = select(max(rt_sockfd, mc_sockfd)+1, 
@@ -471,7 +478,6 @@ int main (int argc, char *argv[]) {
             //printf ("====================== HNDLD MCAST MSG ========================\n");
         }
     }
-#endif
     return 0;
 
 }

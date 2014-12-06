@@ -262,7 +262,6 @@ char *get_name_ip (char *ip) {
     
     assert(ip);
 
-    DEBUG(printf("\nIP Address recvd : %s\n", ip));
     struct hostent *he;
     struct in_addr ipv4addr;
 
