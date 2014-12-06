@@ -19,7 +19,7 @@ areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr) {
     
     struct sockaddr_in *inaddr = (struct sockaddr_in *)IPaddr;
     
-    char str_seq[MAXLINE], buff[MAXLINE]; 
+    char str_seq[MAXLINE], buff[MAXLINE], ipaddr[IP_LEN]; 
     socklen = sizeof (struct sockaddr_un);
     
     /* create new UNIX Domain socket */
@@ -41,7 +41,11 @@ areq (struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr) {
     
     printf("\n Dest ip sent %s\n", inet_ntoa(inaddr->sin_addr));
 
-    if ((length = write(sockfd, &inaddr->sin_addr, sizeof(int))) < 0) {
+    strncpy(ipaddr, inet_ntoa(inaddr->sin_addr), IP_LEN);
+    sprintf(buff, "%s,%d,%hu,%u", ipaddr, HWaddr->sll_ifindex, 
+                                        HWaddr->sll_hatype, HWaddr->sll_halen);
+
+    if ((length = write(sockfd, buff, strlen(buff))) < 0) {
         fprintf(stderr, "\nerror writing on unix domain socket\n");
         return -1;
     }
@@ -262,7 +266,7 @@ char *get_name_ip (char *ip) {
     
     assert(ip);
 
-    DEBUG(printf("\nIP Address recvd : %s\n", ip));
+    //DEBUG(printf("\nIP Address recvd : %s\n", ip));
     struct hostent *he;
     struct in_addr ipv4addr;
 

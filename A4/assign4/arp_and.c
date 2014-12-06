@@ -4,9 +4,6 @@
 #include <assert.h>
 
 
-/* hack global var */
-int global_connfd;
-
 /* Construct ARP frame */
 arp_frame_t *
 construct_arp (int hard_type, int prot_type, int op, char *src_mac,
@@ -33,6 +30,36 @@ construct_arp (int hard_type, int prot_type, int op, char *src_mac,
 
     return arp_frame;
 }
+
+
+
+void print_cache () {
+        
+        c_entry_t *entry = cache_table_head;
+
+        printf("-----------------------------------------------"
+                    "--------------------\n");
+        printf("| %15s | %18s | %5s | %8s |\n", "IP ADDR", "HW ADDR", "ifno", "conn fd");
+        printf("-----------------------------------------------"
+                    "--------------------\n");
+        
+        for (; entry != NULL; entry = entry->next) {
+
+            printf("| %s  |", entry->ip_addr);
+            print_mac(entry->mac_addr);
+            printf("| %5d | %8d |\n", entry->if_no, entry->sockfd);
+            printf("-----------------------------------------------"
+                    "--------------------\n");
+        }
+
+    return;
+}
+
+
+
+
+
+
 
 /* send raw ethernet frame */
 int 
@@ -148,10 +175,79 @@ update_c_entry (arp_frame_t *recv_buf, c_entry_t *c_entry,
     return 1;
 }
 
+/* insert entry in cache based on values from proc */
+int
+insert_in_cache (char *ip_addr, char *HWaddr, int if_index, 
+                                unsigned short sll_hatype, int connfd) {
+    assert(ip_addr);
+    assert(HWaddr);
+
+    /* create new entry */
+    c_entry_t *c_entry = (c_entry_t *)calloc(1, sizeof(c_entry_t));
+
+    strcpy(c_entry->ip_addr, ip_addr);
+    memcpy(c_entry->mac_addr, HWaddr, HW_ADDR_LEN);
+    c_entry->if_no      = if_index;
+    c_entry->sll_hatype = sll_hatype;
+    c_entry->sockfd     = connfd;
+    
+    if (!cache_table_head) {
+        cache_table_head = c_entry;
+        return 1;
+    }
+
+    c_entry->next     = cache_table_head;
+    cache_table_head  = c_entry;
+    
+    return 1;
+}
+
+int 
+update_cache_entry (c_entry_t *entry, char *src_ip, char *srcmac, 
+                            int sll_ifindex, int sll_hatype, int connfd) {
+    assert(src_ip);
+    
+    if (entry == NULL)
+        return -1;
+
+    memcpy(entry->mac_addr, srcmac, HW_ADDR_LEN);
+    entry->if_no = sll_ifindex;
+    entry->sll_hatype = sll_hatype;
+    entry->sockfd = connfd;
+
+    return 1;
+}
+
+
+
+
+/* get the entry based on ip */
+c_entry_t *
+find_c_entry (char *ipaddr) {
+
+    assert(ipaddr);
+    c_entry_t *node = cache_table_head;
+
+    for(; node != NULL; node = node->next) {
+
+        if (strcmp(node->ip_addr, ipaddr) == 0)
+            return node;
+    }
+    
+    return NULL;
+}
+
+
+
+
+
+
+
+
 /* file the cache table entry */
 int
-insert_c_entry (arp_frame_t *recvd_frame, c_entry_t **c_entry,
-        int intf_n) {
+insert_c_entry (arp_frame_t *recvd_frame, c_entry_t **c_entry, int intf_n) {
+    
     assert(recvd_frame);
 
     /* create new entry */
@@ -170,7 +266,6 @@ insert_c_entry (arp_frame_t *recvd_frame, c_entry_t **c_entry,
     }
 
     /* insert it as top of cache table */
-    cache_table_head->prev = (*c_entry);
     (*c_entry)->next = cache_table_head;
     cache_table_head = *c_entry;
 
@@ -294,21 +389,31 @@ send_arp_response (int pf_packet, char *dest_ip, char *dest_hw_addr, int sll_ifi
 
 /* Handle ARP Requests received from peer message. */
 int 
-handle_proc_msg (int proc_sockfd, int arp_sockfd, char *buff) {
+handle_proc_msg (int proc_sockfd, int arp_sockfd, char *buff, int connfd) {
     
     assert(buff);
     
     char *src_ip = get_self_ip ();
-    struct in_addr destip = *(struct in_addr *)buff;
+   // struct in_addr destip = *(struct in_addr *)buff;
+    char dstip[IP_LEN], sll_ifindex[16], sll_hatype[MAXLINE], sll_halen[MAXLINE];
+    
+    sscanf(buff, "%[^','],%[^','],%[^','],%s",                                                                                                                                             
+                                dstip, sll_ifindex, sll_hatype, sll_halen); 
 
-    DEBUG(printf("\nReceived : %s\n", inet_ntoa(destip)));
+    DEBUG(printf("\nReceived : %s\n", dstip));
     
     /* send the arp request out on all interfaces */
-    if (send_arp_req_broadcast (arp_sockfd, inet_ntoa(destip), src_ip) < 0) {
+    if (send_arp_req_broadcast (arp_sockfd, dstip, src_ip) < 0) {
         printf ("Error sending ARP REQ\n");
         return -1;
     }
     
+    if (insert_in_cache (dstip, "0.0.0.0", atoi(sll_ifindex), (unsigned short)atoi(sll_hatype), connfd)  < 0) {
+        fprintf(stderr, "Error in inserting entry in cache"); 
+        return -1;
+    }
+    
+    print_cache();
     return 1;
 }
 
@@ -319,8 +424,9 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
     
     struct sockaddr_un arp_proc_addr;
     char str_seq[MAXLINE], temp[MAXLINE];
-    char *self_eth_hwaddr, *dstmac_rcvd;
+    char *self_eth_hwaddr, *srcmac_rcvd;
     void *data = recv_buff + 14;
+    c_entry_t *entry;
 
     arp_frame_t *rcvd_frame = (arp_frame_t *) data;
     int n;
@@ -335,7 +441,6 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
 
     DEBUG (printf ("\nReceived frame src_ip: %s\n", rcvd_frame->src_ip));
     
-  
     switch (rcvd_frame->op) {
         case __ARPREQ: {
 
@@ -346,23 +451,38 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
                 printf ("This request is for me \n"); 
                 
                 /* update entry in cache for this source */
+                if (insert_in_cache (rcvd_frame->src_ip, rcvd_frame->src_mac, 
+                     arp_addr->sll_ifindex, arp_addr->sll_hatype, -1)  < 0) {
+             
+                    fprintf(stderr, "Error in inserting entry in cache"); 
+                    return -1;
+                }
 
                 /* send an ARP Response */
                 send_arp_response(arp_sockfd, rcvd_frame->src_ip, 
                                         rcvd_frame->src_mac, arp_addr->sll_ifindex); 
-
+                
             }
             break;
         }
         case __ARPREP: {
             printf ("ARP Response received.\n");
             
-            dstmac_rcvd = convert_to_mac(rcvd_frame->src_mac);
-            printf("\n Global connfd: %d\n", global_connfd);
-            if (write(global_connfd, dstmac_rcvd, HW_ADDR_LEN) < 0) {
+            srcmac_rcvd = convert_to_mac(rcvd_frame->src_mac);
+
+            /* find entry in cache based on recvd ip */
+            entry  = find_c_entry(rcvd_frame->src_ip);
+            
+            printf("\n connfd: %d\n", entry->sockfd);
+            if (write(entry->sockfd, srcmac_rcvd, HW_ADDR_LEN) < 0) {
                 perror("Error on write");
             }
-
+            
+            close (entry->sockfd);
+            
+            /* update an entry */
+            update_cache_entry(entry, rcvd_frame->src_ip, srcmac_rcvd, 
+                                arp_addr->sll_ifindex, arp_addr->sll_hatype, -1);
             break;
         }
         default: {
@@ -384,12 +504,20 @@ handle_ethernet_msg (int arp_sockfd, int proc_sockfd, struct sockaddr_ll *arp_ad
     //
     //Write (proc_connfd, str_seq, strlen(str_seq));
     
+    print_cache();
     return 1;
 }
 
+
+
+
+
+
+
+
 int main (int argc, const char *argv[]) {
 
-    int proc_sockfd, arp_sockfd, socklen, len, connfd;
+    int proc_sockfd, arp_sockfd, socklen, len, connfd = -1, maxfd;
     struct sockaddr_un serv_addr, proc_addr, resp_addr;
     struct sockaddr_ll arp_addr;
     fd_set set, currset;
@@ -439,7 +567,8 @@ int main (int argc, const char *argv[]) {
     FD_ZERO(&set);
     FD_SET(proc_sockfd, &set);
     FD_SET(arp_sockfd, &set);
-
+    
+    maxfd = max (proc_sockfd, arp_sockfd);
     /* TESTING */
     //handle_proc_msg (proc_sockfd, arp_sockfd);
     //DEBUG (printf ("ARP REQ sent!\n"));
@@ -447,7 +576,7 @@ int main (int argc, const char *argv[]) {
     /* Monitor both sockets. */
     while (1) {
         currset = set;
-        if (select(max(proc_sockfd, arp_sockfd)+1, 
+        if (select(maxfd+1, 
                     &currset, NULL, NULL, NULL) < 0) {
             if(errno == EINTR) {
                 continue;
@@ -481,9 +610,11 @@ int main (int argc, const char *argv[]) {
             /* populate the send params from char sequence received from process */
             //send_params_t* sparams = get_send_params (buff);
             
-            handle_proc_msg (proc_sockfd, arp_sockfd, buff);
-            global_connfd = connfd;
-            printf("\n global connfd %d\n", global_connfd);
+            handle_proc_msg (proc_sockfd, arp_sockfd, buff, connfd);
+            
+            /* we need to listen on connfd */
+            FD_SET (connfd, &set);
+            maxfd = max(maxfd, connfd);
         }
 
         /* receiving on ethernet interface */
@@ -500,6 +631,11 @@ int main (int argc, const char *argv[]) {
 
             if (handle_ethernet_msg (arp_sockfd, proc_sockfd, &arp_addr, recv_buf, src_mac) < 0)
                 return 0;
+        }
+
+        if (FD_ISSET(connfd, &currset)) {
+
+
         }
     }
 

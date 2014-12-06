@@ -4,7 +4,7 @@
 #include <linux/if_arp.h>
 #include <linux/if_packet.h>
 
-#define ARP_HDR_PROTO 10001
+#define ARP_HDR_PROTO 50005
 #define ARP_FRAME_PROTO 10002
 
 /* Type of frame */
@@ -16,9 +16,9 @@ typedef struct c_entry {
     char    ip_addr[IP_LEN];
     char    mac_addr[HW_ADDR_LEN];
     int     if_no;
-    int     sll_hatype;
+    unsigned short sll_hatype;
     int     sockfd;
-    struct c_entry *prev, *next;
+    struct c_entry *next;
 } c_entry_t;
 
 /* ARP Frame */
