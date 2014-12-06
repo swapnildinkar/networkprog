@@ -4,7 +4,31 @@
 
 /* global variables */
 int already_visited = 0;
-int mc_first_msg_rcvd = 0;
+int ping_seq_no = 0;
+int already_pinging_vm[10];
+int pf_sockfd = 0;
+int count_till_five = 0;
+int mc_first_rcvd = 0;
+int stop_pinging = 0;
+
+/* check if we are already pinging this vm */
+int
+check_if_pinging (char *dest_ip) {
+    int vm_idx = atoi (&dest_ip [strlen (dest_ip) - 1]);
+    DEBUG (printf ("vm_idx = %d, ip: %s\n", vm_idx, dest_ip));
+    if (already_pinging_vm[vm_idx] == 1) {
+        printf ("Already pinging\n");
+        return 0;
+    }
+    else if (already_pinging_vm[vm_idx] == 0) {
+
+        printf ("Not already pinging\n");
+        already_pinging_vm[vm_idx] = 1;
+        return 1;
+    }
+    return -1;
+}
+
 /* function returns ip */
 int 
 get_ip (char *serv_vm, char *canon_ip) {
@@ -126,6 +150,65 @@ print_tour (tour_frame_t *t_frame) {
     return 1;
 }
 
+/* ping the destination node. */
+int 
+start_ping (char *dest_mac, char *dest_ip) {
+    int len;
+    struct sockaddr_ll dest;
+    
+    char *self_ip = get_self_ip ();
+    char buffer[MAXLINE];
+
+    struct ethhdr *ethhdr   = (struct ethhdr *) buffer;
+    struct ip *ip           = (struct ip *) buffer + ETH_HDRLEN;
+    struct icmp *icmp       = (struct icmp *) buffer + ETH_HDRLEN + sizeof (struct ip);
+   
+    /* fill the destination sockaddr_ll */
+    memset (&dest, 0, sizeof (dest));
+    dest.sll_protocol   = htons (ICMP_AND);
+    dest.sll_family     = PF_PACKET;
+    dest.sll_ifindex    = 2;
+    dest.sll_halen      = ETH_ALEN;
+    memcpy (dest.sll_addr, dest_mac, ETH_ALEN);
+
+    /* fill the eth header */
+    ethhdr->h_proto     = htons(ETH_P_IP);
+
+    /* fill the ip header */
+    ip->ip_v            = IPVERSION;
+    ip->ip_hl           = sizeof(struct ip) >> 2;
+    ip->ip_tos          = 0;
+#if defined(linux) || defined(__OpenBSD__)
+    ip->ip_len = htons(MAXLINE);    /* network byte order */
+#else
+    ip->ip_len = MAXLINE;           /* host byte order */
+#endif
+    ip->ip_id = htons (HDR_ID + 1);          /* let IP set this */
+    ip->ip_off = 0;         /* frag offset, MF and DF flags */
+    ip->ip_ttl = 1;
+    ip->ip_p   = IPPROTO_AND;
+    ip->ip_sum = csum ((unsigned short *) buffer, sizeof (tour_frame_t));
+    inet_pton (AF_INET, dest_ip, &ip->ip_dst);
+    inet_pton (AF_INET, self_ip, &ip->ip_src);
+
+    /* fill the icmp header */
+    icmp->icmp_type = 8;
+    icmp->icmp_code = 0;
+    icmp->icmp_id = htons (ICMP_AND); 
+    icmp->icmp_seq = htons (ping_seq_no++);
+    memset (icmp->icmp_data, 0xa5, sizeof (icmp->icmp_data));
+    Gettimeofday ((struct timeval *) icmp->icmp_data, NULL);
+    
+    len = 8 + sizeof (icmp->icmp_data);
+    icmp->icmp_cksum = 0;
+    icmp->icmp_cksum = csum ((u_short *) icmp, len); 
+   
+    Sendto (pf_sockfd, buffer, sizeof (buffer), 0, (struct sockaddr *) &dest,
+                sizeof (dest));
+
+    return 1;
+}
+
 /* broadcast on multicast group from final node */
 int
 send_to_multicast_group (int mc_sockfd, char *mc_ip, int mc_port, char *msg) {
@@ -155,20 +238,26 @@ handle_tour (tour_frame_t *t_frame, int rt_sockfd, int mc_sockfd) {
     char mc_msg[MAXLINE];
     char *vm_name = get_name_ip (get_self_ip());
     assert (vm_name);
-    t_frame->index += 1;
+
+    print_tour (t_frame);
+    printf ("idx: %d\n", t_frame->index);
+    if (check_if_pinging (t_frame->payload[t_frame->index - 1])) {
+        /* Start pinging the previous node. */
+        //start_ping (char *dest_mac, char *dest_ip);
+    }
     
+    t_frame->index += 1;
+
     /* check if this is the final node */
     if (t_frame->index == t_frame->size) {
-    
+         
+        /* stop pinging */
+        stop_pinging = 1;
+        
         if (!already_visited) {
             join_multicast_group (t_frame->mc_ip, t_frame->mc_port, mc_sockfd);
         }
        
-        sprintf (mc_msg, "%s%s%s", "<<<<< This is node ", vm_name, 
-                            ".  Tour has ended.  Group members please identify yourselves. >>>>>");
-        
-        /* send message to the multicast group. */
-        send_to_multicast_group (mc_sockfd, t_frame->mc_ip, t_frame->mc_port, mc_msg);
         already_visited = 0;
         return 1;
     }
@@ -181,18 +270,14 @@ handle_tour (tour_frame_t *t_frame, int rt_sockfd, int mc_sockfd) {
         already_visited = 1;
 
         join_multicast_group (t_frame->mc_ip, t_frame->mc_port, mc_sockfd);
-        DEBUG (printf ("Joined multicast group on ip addr: %s and port :%d\n",
-                    t_frame->mc_ip, t_frame->mc_port));
+        printf ("Joined multicast group on ip addr: %s and port :%d\n",
+                    t_frame->mc_ip, t_frame->mc_port);
 
-        /* send the packet to the next node in the tour. */
-        
-        udp_write (t_frame, sizeof (tour_frame_t), t_frame->payload[t_frame->index], 
-                rt_sockfd);
-        
-        return 1;
     }
 
     /* if the node is intermediate node, and has already been visited. */
+    
+    /* Start pinging the previous node. */
     
     /* send the packet to the next node in the tour. */
     udp_write (t_frame, sizeof (tour_frame_t), t_frame->payload[t_frame->index], 
@@ -226,20 +311,44 @@ handle_mc_msg (int mc_sockfd, tour_frame_t *t_frame, char *mc_buf) {
     char mc_msg[MAXLINE];
 
     printf ("Node %s. Received: %s\n", get_name_ip (get_self_ip ()), (char *) mc_buf);
-     
-    if (!mc_first_msg_rcvd) {
+    
+    if (!mc_first_rcvd) {
         sprintf (mc_msg, "%s%s%s", "<<<<< Node ", get_name_ip (get_self_ip()),
                 ".  I am a member of the group. >>>>>");
         send_to_multicast_group (mc_sockfd, t_frame->mc_ip, t_frame->mc_port, 
                 mc_msg);
-        mc_first_msg_rcvd = 1;
+        
+        memset (&already_pinging_vm, 0, sizeof (already_pinging_vm));
+        mc_first_rcvd = 1;
     }
-     
+    
+    return 1;
+}
+
+/* get mac address from ARP. */
+int
+get_mac (char *dest_ip, char *mac) {
+
+    struct sockaddr_in  dest;
+    bzero (&dest, sizeof (struct sockaddr_in));
+    dest.sin_family = AF_INET;
+    inet_pton(AF_INET, dest_ip, &(dest.sin_addr));
+
+    struct hwaddr hw;
+    bzero(&hw, sizeof(struct hwaddr));
+    hw.sll_ifindex = 2;
+    hw.sll_hatype = ARPHRD_ETHER;
+    hw.sll_halen = ETH_ALEN; 
+
+    areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
+    printf("\nAddress recvd in Tour: \n");
+    print_mac (hw.sll_addr);
+    memcpy (mac, hw.sll_addr, HW_ADDR_LEN);
     return 1;
 }
 
 int main (int argc, char *argv[]) {
-    int pf_sockfd, rt_sockfd, mc_sockfd, len, one = 1;
+    int rt_sockfd, mc_sockfd, len, one = 1, t = 0;
     socklen_t rtsize = sizeof (struct sockaddr_in);
     const int *val = &one;
     fd_set set, currset;
@@ -249,21 +358,21 @@ int main (int argc, char *argv[]) {
     struct sockaddr_in rt_addr, mc_addr;
     struct tm *nowtm;
     time_t nowtime;
+    struct timeval ping_t;  
+    
+    ping_t.tv_sec = 1; 
+    ping_t.tv_usec = 0; 
     
     tour_frame_t *t_frame = calloc (1, sizeof (tour_frame_t));
-    gettimeofday(&currtime, NULL);
-    
-    nowtime = currtime.tv_sec;
-    nowtm = localtime(&nowtime);
-    strftime(curr_time, sizeof (curr_time), "%Y-%m-%d %H:%M:%S", nowtm);
-    
+    memset (&already_pinging_vm, 0, sizeof (already_pinging_vm));
+
     /* Get the new PF Packet socket */
     pf_sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
   
     /* The rt socket */
     rt_sockfd = Socket(AF_INET, SOCK_RAW, IPPROTO_AND);
     
-    if(setsockopt(rt_sockfd, IPPROTO_IP, IP_HDRINCL, val, sizeof(1)) < 0)
+    if (setsockopt (rt_sockfd, IPPROTO_IP, IP_HDRINCL, val, sizeof(1)) < 0)
     {
         perror("setsockopt() error");
         exit(-1);
@@ -281,32 +390,48 @@ int main (int argc, char *argv[]) {
     FD_SET(rt_sockfd, &set);
     FD_SET(mc_sockfd, &set);
     
-    struct sockaddr_in  dest;
-    bzero (&dest, sizeof (struct sockaddr_in));
-    dest.sin_family = AF_INET;
-    inet_pton(AF_INET, "130.245.156.21", &(dest.sin_addr));
-
-    struct hwaddr hw;
-    bzero(&hw, sizeof(struct hwaddr));
-    hw.sll_ifindex = 2;
-    hw.sll_hatype = ARPHRD_ETHER;
-    hw.sll_halen = ETH_ALEN; 
-
-    areq((struct sockaddr *)&dest, sizeof(dest), &hw); 
-    printf("\nAddress recvd in Tour: \n");
-    print_mac (hw.sll_addr); 
     
-#if 0
     while (1) {
         currset = set;
-        if (select(max(rt_sockfd, mc_sockfd)+1, 
-                    &currset, NULL, NULL, NULL) < 0) {
+        if ((t = select(max(rt_sockfd, mc_sockfd)+1, 
+                    &currset, NULL, NULL, &ping_t)) < 0) {
             if(errno == EINTR) {
                 continue;
             }
             perror("Select error");
         }
-        
+        else if (t == 0) {
+            
+            int i = 0;
+            char ip_addr[IP_LEN], mac_addr[HW_ADDR_LEN], mc_msg[MAXLINE];
+            for (i = 0;i < 10; i++) {
+                if (already_pinging_vm[i] == 1) {
+                    sprintf (ip_addr, "%s%d", "130.245.156.2", i);
+
+                    printf ("Pinging: %s\n", ip_addr);
+                    
+                    //areq ();
+                    //start_ping (mac_addr, ip_addr);
+                }
+            }
+
+            if (stop_pinging)
+                count_till_five++;
+
+            if (stop_pinging && count_till_five == 5) {
+
+                sprintf (mc_msg, "%s%s%s", "<<<<< This is node ", get_name_ip (get_self_ip ()), 
+                        ".  Tour has ended.  Group members please identify yourselves. >>>>>");
+
+                /* send message to the multicast group. */
+                send_to_multicast_group (mc_sockfd, t_frame->mc_ip, t_frame->mc_port, mc_msg);
+                
+            }
+            
+            ping_t.tv_sec = 1; 
+            ping_t.tv_usec = 0; 
+        }
+
         /* receiving from another tour process */
         if (FD_ISSET(rt_sockfd, &currset)) {
 
@@ -316,13 +441,19 @@ int main (int argc, char *argv[]) {
                 perror("\nError in recvfrom");
                 return 0;
             }
-                    
+
             t_frame = (tour_frame_t *) rt_buf;
-            
+
             if (ntohs(t_frame->ip_hdr.ip_id) != HDR_ID) {
                 continue;
             }
-            
+
+            gettimeofday(&currtime, NULL);
+
+            nowtime = currtime.tv_sec;
+            nowtm = localtime(&nowtime);
+            strftime(curr_time, sizeof (curr_time), "%Y-%m-%d %H:%M:%S", nowtm);
+
             //DEBUG (print_tour (t_frame));
             vm_name = get_name_ip (t_frame->payload[(t_frame->index - 1)]);
             printf ("%s received source routing packet from %s\n", curr_time, vm_name);
@@ -341,13 +472,12 @@ int main (int argc, char *argv[]) {
                 perror("\nError in recvfrom");
                 return 0;
             }
-
+            
             handle_mc_msg (mc_sockfd, t_frame, mc_buf);
             
             //printf ("====================== HNDLD MCAST MSG ========================\n");
         }
     }
-#endif
     return 0;
 
 }
